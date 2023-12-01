@@ -581,10 +581,10 @@ importers:
         specifier: workspace:*
         version: link:../chains
       '@thirdweb-dev/react-core':
-        specifier: workspace:*
+        specifier: ^4.1.10
         version: link:../react-core
       '@thirdweb-dev/wallets':
-        specifier: workspace:*
+        specifier: ^2.1.9
         version: link:../wallets
       buffer:
         specifier: ^6.0.3

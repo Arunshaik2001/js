@@ -1,4 +1,4 @@
-import { ConnectUIProps, useConnect } from "@thirdweb-dev/react-core";
+import { ConnectUIProps, WalletInstance } from "@thirdweb-dev/react-core";
 import { useEffect, useRef } from "react";
 import { Container } from "../../components/basic";
 import { Spinner } from "../../components/Spinner";
@@ -10,8 +10,8 @@ export const HeadlessConnectUI = ({
   show,
   supportedWallets,
   goBack,
-}: ConnectUIProps<any>) => {
-  const connect = useConnect();
+  connect,
+}: ConnectUIProps<WalletInstance>) => {
   const prompted = useRef(false);
   const singleWallet = supportedWallets.length === 1;
 
@@ -24,7 +24,7 @@ export const HeadlessConnectUI = ({
     (async () => {
       hide();
       try {
-        await connect(walletConfig);
+        await connect();
         connected();
       } catch (e) {
         if (!singleWallet) {

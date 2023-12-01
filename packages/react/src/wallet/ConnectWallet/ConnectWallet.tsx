@@ -3,7 +3,6 @@ import { ConnectedWalletDetails, type DropDownPosition } from "./Details";
 import {
   useAddress,
   useConnectionStatus,
-  useDisconnect,
   useLogout,
   useNetworkMismatch,
   useSwitchChain,
@@ -22,7 +21,6 @@ import { Button } from "../../components/buttons";
 import { Spinner } from "../../components/Spinner";
 import styled from "@emotion/styled";
 import type { NetworkSelectorProps } from "./NetworkSelector";
-import { onModalUnmount } from "./constants";
 import { isMobile } from "../../evm/utils/isMobile";
 import {
   CustomThemeProvider,
@@ -178,7 +176,6 @@ export const ConnectWallet: React.FC<ConnectWalletProps> = (props) => {
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const address = useAddress();
   const { user } = useUser();
-  const disconnect = useDisconnect();
 
   const connectedButNotSignedIn =
     !!authConfig?.authUrl &&
@@ -221,9 +218,6 @@ export const ConnectWallet: React.FC<ConnectWalletProps> = (props) => {
         setOpen={(value) => {
           if (!value) {
             setShowSignatureModal(false);
-            onModalUnmount(() => {
-              disconnect();
-            });
           }
         }}
       >

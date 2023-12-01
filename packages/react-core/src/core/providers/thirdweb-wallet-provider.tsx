@@ -1,6 +1,8 @@
 import { DAppMetaData } from "../types/dAppMeta";
 import type {
+  ConnectionStatus,
   WalletConfig,
+  WalletConnectParams,
   WalletInstance,
   WalletOptions,
 } from "../types/wallet";
@@ -39,13 +41,6 @@ type LastConnectedWalletInfo = {
   };
 };
 
-type NonNullable<T> = T extends null | undefined ? never : T;
-type WalletConnectParams<I extends WalletInstance> = Parameters<
-  I["connect"]
->[0];
-
-type ConnectionStatus = "unknown" | "connected" | "disconnected" | "connecting";
-
 type ConnectFnArgs<I extends WalletInstance> =
   // if second argument is optional
   undefined extends WalletConnectParams<I>
@@ -64,6 +59,14 @@ const walletInstanceToConfig: Map<
   WalletInstance,
   WalletConfig<any>
 > = new Map();
+
+type WalletSetupData = {
+  chains: Chain[];
+  dAppMeta?: DAppMetaData;
+  activeChain?: Chain;
+  clientId?: string;
+  chainToConnect?: Chain;
+};
 
 type ThirdwebWalletContextData = {
   wallets: WalletConfig[];
@@ -92,6 +95,7 @@ type ThirdwebWalletContextData = {
   getWalletConfig: (walletInstance: WalletInstance) => WalletConfig | undefined;
   activeChainSetExplicitly: boolean;
   clientId?: string;
+  walletSetupData: WalletSetupData;
 };
 
 const ThirdwebWalletContext = /* @__PURE__ */ createContext<
@@ -113,168 +117,53 @@ export function ThirdwebWalletProvider(
     signerWallet?: WalletConfig<SignerWallet>;
   }>,
 ) {
-  const [signer, setSigner] = useState<Signer | undefined>(undefined);
-  const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>("unknown");
-
   const autoConnectTimeout = props.autoConnectTimeout || 15000;
 
-  const [activeWallet, setActiveWallet] = useState<
-    WalletInstance | undefined
-  >();
+  // if autoSwitch is enabled - enforce connection to activeChain
+  const chainToConnect = props.autoSwitch ? props.activeChain : undefined;
 
-  const [createdWalletInstance, setCreatedWalletInstance] = useState<
-    WalletInstance | undefined
-  >();
+  const walletSetupData: WalletSetupData = {
+    chains: props.chains,
+    dAppMeta: props.dAppMeta,
+    activeChain: props.activeChain,
+    clientId: props.clientId,
+    chainToConnect,
+  };
 
-  const [activeWalletConfig, setActiveWalletConfig] = useState<
-    WalletConfig | undefined
-  >();
+  const {
+    signer,
+    connectionStatus,
+    setConnectionStatus,
+    activeWallet,
+    createdWalletInstance,
+    activeWalletConfig,
+    createWalletInstance,
+    setConnectedWallet,
+    switchChain,
+    connectWallet,
+    disconnectWallet,
+  } = useWalletConnectionSetup(walletSetupData);
 
   if (!lastConnectedWalletStorage) {
     lastConnectedWalletStorage =
       props.createWalletStorage("coordinatorStorage");
   }
 
-  // if autoSwitch is enabled - enforce connection to activeChain
-  const chainToConnect = props.autoSwitch ? props.activeChain : undefined;
-
-  const walletParams: WalletOptions = useMemo(() => {
-    return {
-      chains: props.chains,
-      dappMetadata: props.dAppMeta,
-      chain: props.activeChain || props.chains[0],
-      clientId: props.clientId,
-    };
-  }, [props.chains, props.dAppMeta, props.activeChain, props.clientId]);
-
-  const createWalletInstance = useCallback(
-    <I extends WalletInstance>(walletConfig: WalletConfig<I>): I => {
-      const walletInstance = walletConfig.create(walletParams);
-      if (walletInstance.walletId === walletIds.magicLink) {
-        // NOTE: removing this if statement causes the component to re-render
-        // Patch for magic link wallet in react native
-        // needed because we need to add a component to the view tree
-        // from the instance, right before calling connect.
-        // Check it out in RN's DappContextProvider.
-        setCreatedWalletInstance(walletInstance);
-      }
-      walletInstanceToConfig.set(walletInstance, walletConfig);
-      return walletInstance;
-    },
-    [walletParams],
-  );
-
-  // if props.chains is updated, update the active wallet's chains
-  useEffect(() => {
-    if (activeWallet) {
-      activeWallet.updateChains(props.chains);
-    }
-  }, [activeWallet, props.chains]);
-
-  const setConnectedWallet = useCallback(
-    async (
-      wallet: WalletInstance,
-      connectParams?: ConnectParams<Record<string, any>>,
-      isAutoConnect = false,
-    ) => {
-      setActiveWallet(wallet);
-      const walletConfig = walletInstanceToConfig.get(wallet);
-      if (!walletConfig) {
-        throw new Error(
-          "Wallet config not found for given wallet instance. Do not create a wallet instance manually - use the useCreateWalletInstance() hook instead",
-        );
-      }
-      setActiveWalletConfig(walletConfig);
-      setConnectionStatus("connected");
-      const _signer = await wallet.getSigner();
-      setSigner(_signer);
-
-      // it autoconnected, then the details is already saved in storage, no need to store again
-      if (isAutoConnect) {
-        return;
-      }
-
-      // save to storage
-
-      const walletInfo: LastConnectedWalletInfo = {
-        walletId: walletConfig.id,
-        connectParams: connectParams || wallet.getConnectParams(),
-      };
-
-      // if personal wallet exists, we need to replace the connectParams.personalWallet to a stringifiable version
-      const personalWallet = wallet.getPersonalWallet() as AbstractClientWallet;
-      const personalWalletConfig = walletInstanceToConfig.get(personalWallet);
-
-      if (personalWallet && personalWalletConfig) {
-        walletInfo.connectParams = {
-          ...walletInfo.connectParams,
-          personalWallet: {
-            walletId: personalWalletConfig.id,
-            connectParams: personalWallet.getConnectParams(),
-          },
-        };
-
-        saveLastConnectedWalletInfo(walletInfo);
-      } else {
-        saveLastConnectedWalletInfo(walletInfo);
-      }
-    },
-    [],
-  );
-
-  const storeLastActiveChainId = useCallback(async (chainId: number) => {
-    const lastConnectedWallet = await lastConnectedWalletStorage.getItem(
-      LAST_CONNECTED_WALLET_STORAGE_KEY,
-    );
-
-    if (!lastConnectedWallet) {
-      return;
-    }
-
-    try {
-      const parsedWallet = JSON.parse(lastConnectedWallet as string);
-      if (parsedWallet.connectParams) {
-        parsedWallet.connectParams.chainId = chainId;
-      } else {
-        parsedWallet.connectParams = { chainId };
-      }
-      await lastConnectedWalletStorage.setItem(
-        LAST_CONNECTED_WALLET_STORAGE_KEY,
-        JSON.stringify(parsedWallet),
-      );
-    } catch (error) {
-      console.error(`Error saving the last active chain: ${error}`);
-    }
-  }, []);
-
-  const switchChain = useCallback(
-    async (chainId: number) => {
-      if (!activeWallet) {
-        throw new Error("No active wallet");
-      }
-
-      await activeWallet.switchChain(chainId);
-      const _signer = await activeWallet.getSigner();
-      await storeLastActiveChainId(chainId);
-
-      setSigner(_signer);
-    },
-    [activeWallet, storeLastActiveChainId],
-  );
-
   const autoConnectTriggered = useRef(false);
 
   // Auto Connect
   useEffect(() => {
+    if (autoConnectTriggered.current) {
+      return;
+    }
+
+    autoConnectTriggered.current = true;
+
     // do not auto connect if signerWallet is given
     if (props.signerWallet) {
       return;
     }
 
-    if (autoConnectTriggered.current) {
-      return;
-    }
     // if explicitly set to false, don't auto connect
     // by default, auto connect
     if (props.shouldAutoConnect === false) {
@@ -294,7 +183,7 @@ export function ThirdwebWalletProvider(
 
     autoConnectTriggered.current = true;
 
-    async function autoconnect() {
+    async function autoConnect() {
       const walletInfo = await getLastConnectedWalletInfo();
 
       if (!walletInfo) {
@@ -400,7 +289,7 @@ export function ThirdwebWalletProvider(
       }
     }
 
-    autoconnect();
+    autoConnect();
   }, [
     createWalletInstance,
     props.supportedWallets,
@@ -410,7 +299,204 @@ export function ThirdwebWalletProvider(
     connectionStatus,
     autoConnectTimeout,
     props.signerWallet,
+    setConnectionStatus,
   ]);
+
+  // connect signerWallet immediately if it's passed
+  // and disconnect it if it's not passed
+  const signerConnected = useRef<typeof props.signerWallet>();
+  useEffect(() => {
+    if (!props.signerWallet) {
+      if (signerConnected.current) {
+        disconnectWallet();
+        signerConnected.current = undefined;
+      }
+      return;
+    }
+
+    if (signerConnected.current === props.signerWallet) {
+      return;
+    }
+
+    const wallet = createWalletInstance(props.signerWallet);
+    setConnectedWallet(wallet);
+    signerConnected.current = props.signerWallet;
+  }, [
+    createWalletInstance,
+    props.supportedWallets,
+    setConnectedWallet,
+    props.signerWallet,
+    disconnectWallet,
+  ]);
+
+  return (
+    <ThirdwebWalletContext.Provider
+      value={{
+        disconnect: disconnectWallet,
+        wallets: props.supportedWallets,
+        connect: connectWallet,
+        signer,
+        activeWallet,
+        activeWalletConfig,
+        connectionStatus,
+        setConnectionStatus,
+        createWalletInstance: createWalletInstance,
+        createdWalletInstance: createdWalletInstance,
+        createWalletStorage: props.createWalletStorage,
+        switchChain,
+        setConnectedWallet: setConnectedWallet,
+        activeChain: props.activeChain,
+        chainToConnect,
+        getWalletConfig: (walletInstance: WalletInstance) => {
+          return walletInstanceToConfig.get(walletInstance);
+        },
+        activeChainSetExplicitly: props.activeChainSetExplicitly,
+        clientId: props.clientId,
+        walletSetupData: walletSetupData,
+      }}
+    >
+      {props.children}
+    </ThirdwebWalletContext.Provider>
+  );
+}
+
+export function useWalletConnectionSetup(data: WalletSetupData) {
+  const { chains, chainToConnect } = data;
+  const [signer, setSigner] = useState<Signer | undefined>(undefined);
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("unknown");
+  const [connectedChainId, setConnectedChainId] = useState<number | undefined>(
+    undefined,
+  );
+
+  const [activeWallet, setActiveWallet] = useState<
+    WalletInstance | undefined
+  >();
+
+  const [createdWalletInstance, setCreatedWalletInstance] = useState<
+    WalletInstance | undefined
+  >();
+
+  const [activeWalletConfig, setActiveWalletConfig] = useState<
+    WalletConfig | undefined
+  >();
+
+  const walletParams: WalletOptions = useMemo(() => {
+    return {
+      chains: data.chains,
+      dappMetadata: data.dAppMeta,
+      chain: data.activeChain || data.chains[0],
+      clientId: data.clientId,
+    };
+  }, [data.chains, data.dAppMeta, data.activeChain, data.clientId]);
+
+  const createWalletInstance = useCallback(
+    <I extends WalletInstance>(walletConfig: WalletConfig<I>): I => {
+      const walletInstance = walletConfig.create(walletParams);
+      if (walletInstance.walletId === walletIds.magicLink) {
+        // NOTE: removing this if statement causes the component to re-render
+        // Patch for magic link wallet in react native
+        // needed because we need to add a component to the view tree
+        // from the instance, right before calling connect.
+        // Check it out in RN's DappContextProvider.
+        setCreatedWalletInstance(walletInstance);
+      }
+      walletInstanceToConfig.set(walletInstance, walletConfig);
+      return walletInstance;
+    },
+    [walletParams],
+  );
+
+  const setConnectedWallet = useCallback(
+    async (
+      wallet: WalletInstance,
+      connectParams?: ConnectParams<Record<string, any>>,
+      isAutoConnect = false,
+    ) => {
+      setActiveWallet(wallet);
+      const walletConfig = walletInstanceToConfig.get(wallet);
+      if (!walletConfig) {
+        throw new Error(
+          "Wallet config not found for given wallet instance. Do not create a wallet instance manually - use the useCreateWalletInstance() hook instead",
+        );
+      }
+      setActiveWalletConfig(walletConfig);
+      setConnectionStatus("connected");
+      const _signer = await wallet.getSigner();
+      setSigner(_signer);
+
+      // it auto-connected, then the details is already saved in storage, no need to store again
+      if (isAutoConnect) {
+        return;
+      }
+
+      // save to storage
+
+      const walletInfo: LastConnectedWalletInfo = {
+        walletId: walletConfig.id,
+        connectParams: connectParams || wallet.getConnectParams(),
+      };
+
+      // if personal wallet exists, we need to replace the connectParams.personalWallet to a stringifiable version
+      const personalWallet = wallet.getPersonalWallet() as AbstractClientWallet;
+      const personalWalletConfig = walletInstanceToConfig.get(personalWallet);
+
+      if (personalWallet && personalWalletConfig) {
+        walletInfo.connectParams = {
+          ...walletInfo.connectParams,
+          personalWallet: {
+            walletId: personalWalletConfig.id,
+            connectParams: personalWallet.getConnectParams(),
+          },
+        };
+
+        saveLastConnectedWalletInfo(walletInfo);
+      } else {
+        saveLastConnectedWalletInfo(walletInfo);
+      }
+    },
+    [],
+  );
+
+  const storeLastActiveChainId = useCallback(async (chainId: number) => {
+    const lastConnectedWallet = await lastConnectedWalletStorage.getItem(
+      LAST_CONNECTED_WALLET_STORAGE_KEY,
+    );
+
+    if (!lastConnectedWallet) {
+      return;
+    }
+
+    try {
+      const parsedWallet = JSON.parse(lastConnectedWallet as string);
+      if (parsedWallet.connectParams) {
+        parsedWallet.connectParams.chainId = chainId;
+      } else {
+        parsedWallet.connectParams = { chainId };
+      }
+      await lastConnectedWalletStorage.setItem(
+        LAST_CONNECTED_WALLET_STORAGE_KEY,
+        JSON.stringify(parsedWallet),
+      );
+    } catch (error) {
+      console.error(`Error saving the last active chain: ${error}`);
+    }
+  }, []);
+
+  const switchChain = useCallback(
+    async (chainId: number) => {
+      if (!activeWallet) {
+        throw new Error("No active wallet");
+      }
+
+      await activeWallet.switchChain(chainId);
+      const _signer = await activeWallet.getSigner();
+      await storeLastActiveChainId(chainId);
+
+      setSigner(_signer);
+    },
+    [activeWallet, storeLastActiveChainId],
+  );
 
   const connectWallet = useCallback(
     async <I extends WalletInstance>(...args: ConnectFnArgs<I>): Promise<I> => {
@@ -472,86 +558,55 @@ export function ThirdwebWalletProvider(
     onWalletDisconnect();
   }, [activeWallet, onWalletDisconnect]);
 
+  // if chains is updated, update the active wallet's chains
+  useEffect(() => {
+    if (activeWallet) {
+      activeWallet.updateChains(chains);
+    }
+  }, [activeWallet, chains]);
+
   // when wallet's network or account is changed using the extension, update UI
   useEffect(() => {
     if (!activeWallet) {
       return;
     }
 
+    const updateChainId = () => {
+      activeWallet?.getChainId().then((_chainId) => {
+        setConnectedChainId(_chainId);
+      });
+    };
+
     const update = async () => {
+      updateChainId();
       const _signer = await activeWallet.getSigner();
       setSigner(_signer);
     };
 
-    activeWallet.addListener("change", () => {
-      update();
-    });
-
-    activeWallet.addListener("disconnect", () => {
-      onWalletDisconnect();
-    });
+    updateChainId();
+    activeWallet.addListener("change", update);
+    activeWallet.addListener("disconnect", onWalletDisconnect);
 
     return () => {
-      activeWallet.removeListener("change");
-      activeWallet.removeListener("disconnect");
+      activeWallet.removeListener("change", update);
+      activeWallet.removeListener("disconnect", onWalletDisconnect);
     };
-  }, [activeWallet, onWalletDisconnect]);
+  }, [activeWallet, onWalletDisconnect, setSigner]);
 
-  // connect signerWallet immediately if it's passed
-  // and disconnect it if it's not passed
-  const signerConnected = useRef<typeof props.signerWallet>();
-  useEffect(() => {
-    if (!props.signerWallet) {
-      if (signerConnected.current) {
-        disconnectWallet();
-        signerConnected.current = undefined;
-      }
-      return;
-    }
-
-    if (signerConnected.current === props.signerWallet) {
-      return;
-    }
-
-    const wallet = createWalletInstance(props.signerWallet);
-    setConnectedWallet(wallet);
-    signerConnected.current = props.signerWallet;
-  }, [
+  return {
+    signer,
+    connectionStatus,
+    setConnectionStatus,
+    activeWallet,
+    createdWalletInstance,
+    activeWalletConfig,
     createWalletInstance,
-    props.supportedWallets,
     setConnectedWallet,
-    props.signerWallet,
+    switchChain,
+    connectWallet,
     disconnectWallet,
-  ]);
-
-  return (
-    <ThirdwebWalletContext.Provider
-      value={{
-        disconnect: disconnectWallet,
-        wallets: props.supportedWallets,
-        connect: connectWallet,
-        signer,
-        activeWallet,
-        activeWalletConfig,
-        connectionStatus,
-        setConnectionStatus,
-        createWalletInstance: createWalletInstance,
-        createdWalletInstance: createdWalletInstance,
-        createWalletStorage: props.createWalletStorage,
-        switchChain,
-        setConnectedWallet: setConnectedWallet,
-        activeChain: props.activeChain,
-        chainToConnect,
-        getWalletConfig: (walletInstance: WalletInstance) => {
-          return walletInstanceToConfig.get(walletInstance);
-        },
-        activeChainSetExplicitly: props.activeChainSetExplicitly,
-        clientId: props.clientId,
-      }}
-    >
-      {props.children}
-    </ThirdwebWalletContext.Provider>
-  );
+    connectedChainId,
+  };
 }
 
 export function useWalletContext() {

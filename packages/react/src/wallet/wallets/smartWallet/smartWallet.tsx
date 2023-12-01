@@ -2,7 +2,8 @@ import {
   WalletConfig,
   ConnectUIProps,
   WalletOptions,
-  useWallet,
+  useWalletConnectionSetup,
+  useWalletContext,
 } from "@thirdweb-dev/react-core";
 import { SmartWallet } from "@thirdweb-dev/wallets";
 import { SmartWalletConfig, SmartWalletConfigOptions } from "./types";
@@ -20,7 +21,7 @@ export const smartWallet = (
     create: (options: WalletOptions) =>
       new SmartWallet({ ...options, ...config }),
     connectUI(props) {
-      return <SmartConnectUI {...props} personalWallet={wallet} />;
+      return <SmartConnectUI {...props} personalWalletConfig={wallet} />;
     },
     selectUI: WalletSelectUI
       ? (props) => {
@@ -32,24 +33,40 @@ export const smartWallet = (
 };
 
 export const SmartConnectUI = (
-  props: ConnectUIProps<SmartWallet> & { personalWallet: WalletConfig },
+  props: ConnectUIProps<SmartWallet> & { personalWalletConfig: WalletConfig },
 ) => {
-  const activeWallet = useWallet();
+  const { walletSetupData } = useWalletContext();
   const { walletConfig } = props;
+  const { personalWalletConfig, ...restProps } = props;
+  const personalWalletConnection = useWalletConnectionSetup(walletSetupData);
 
-  const PersonalWalletConfig = props.personalWallet;
-
-  if (!activeWallet) {
+  if (!personalWalletConnection.activeWallet) {
     const _props: ConnectUIProps = {
-      ...props,
-      walletConfig: PersonalWalletConfig,
+      ...restProps,
+      walletConfig: personalWalletConfig,
+      supportedWallets: [personalWalletConfig],
       connected: () => {
         // override to no-op
       },
+      connect(options) {
+        console.log("personal wallet connected");
+        return personalWalletConnection.connectWallet(
+          personalWalletConfig,
+          options,
+        );
+      },
+      setConnectedWallet(wallet) {
+        console.log("personal wallet set");
+        personalWalletConnection.setConnectedWallet(wallet);
+      },
+      setConnectionStatus(status) {
+        console.log("personal wallet status set");
+        personalWalletConnection.setConnectionStatus(status);
+      },
     };
 
-    if (PersonalWalletConfig.connectUI) {
-      return <PersonalWalletConfig.connectUI {..._props} />;
+    if (personalWalletConfig.connectUI) {
+      return <personalWalletConfig.connectUI {..._props} />;
     }
 
     return <HeadlessConnectUI {..._props} />;
@@ -58,9 +75,15 @@ export const SmartConnectUI = (
   return (
     <SmartWalletConnecting
       onBack={props.goBack}
-      onConnect={props.connected}
+      onConnect={() => {
+        console.log("smart wallet connected");
+        props.connected();
+      }}
       smartWallet={walletConfig}
-      personalWallet={props.personalWallet}
+      personalWalletConfig={personalWalletConfig}
+      personalWallet={personalWalletConnection.activeWallet}
+      personalWalletChainId={personalWalletConnection.connectedChainId || 1}
+      switchChainPersonalWallet={personalWalletConnection.switchChain}
     />
   );
 };

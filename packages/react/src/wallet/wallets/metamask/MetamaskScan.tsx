@@ -5,7 +5,7 @@ import {
 } from "@thirdweb-dev/react-core";
 import { useEffect, useRef, useState } from "react";
 import type { MetaMaskWallet } from "@thirdweb-dev/wallets";
-import type { WalletConfig } from "@thirdweb-dev/react-core";
+import type { ConnectionStatus, WalletConfig } from "@thirdweb-dev/react-core";
 import { useTWLocale } from "../../../evm/providers/locale-provider";
 
 export const MetamaskScan: React.FC<{
@@ -14,12 +14,23 @@ export const MetamaskScan: React.FC<{
   onConnected: () => void;
   walletConfig: WalletConfig<MetaMaskWallet>;
   hideBackButton: boolean;
-}> = ({ onBack, onConnected, onGetStarted, walletConfig, hideBackButton }) => {
+  setConnectionStatus: (status: ConnectionStatus) => void;
+  setConnectedWallet: (wallet: MetaMaskWallet) => void;
+}> = (props) => {
+  const {
+    onBack,
+    onConnected,
+    onGetStarted,
+    walletConfig,
+    hideBackButton,
+    setConnectionStatus,
+    setConnectedWallet,
+  } = props;
+
   const locale = useTWLocale().wallets.metamaskWallet;
   const createInstance = useCreateWalletInstance();
   const [qrCodeUri, setQrCodeUri] = useState<string | undefined>();
-  const { setConnectedWallet, chainToConnect, setConnectionStatus } =
-    useWalletContext();
+  const { chainToConnect } = useWalletContext();
 
   const scanStarted = useRef(false);
   useEffect(() => {
@@ -43,10 +54,10 @@ export const MetamaskScan: React.FC<{
     });
   }, [
     createInstance,
-    setConnectedWallet,
     chainToConnect,
     onConnected,
     walletConfig,
+    setConnectedWallet,
     setConnectionStatus,
   ]);
 
